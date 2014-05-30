@@ -38,10 +38,24 @@ void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 		
 		DNSServiceBrowse(ref, 0, 0, *String::Utf8Value(args[0]->ToString()), NULL, [](DNSServiceRef sdRef, DNSServiceFlags flags, uint32_t interfaceIndex, DNSServiceErrorType errorCode, const char *serviceName, const char *regtype, const char *replyDomain, void *context) {
 			auto isolate = Isolate::GetCurrent();
-			ThrowException(String::NewFromUtf8(isolate, "Got something"));
 
-			//Local<Value> argv[1] = { True(isolate) };
-			//MakeCallback(refMap[&sdRef], "emit", 1, argv);
+			auto tpl = FunctionTemplate::New();
+			tpl->SetClassName(String::NewFromUtf8(isolate, "DNSServiceBrowserReply"));
+			tpl->InstanceTemplate()->SetInternalFieldCount(0);
+
+			auto ret = tpl->InstanceTemplate()->NewInstance();
+			auto type = "";
+
+			if (flags & kDNSServiceFlagsAdd)
+				type = "found";
+			else
+				type = "lost";
+
+			ret->Set(String::NewSymbol("type"), String::NewFromUtf8(isolate, type));
+			ret->Set(String::NewSymbol("host"), String::NewFromUtf8(isolate, serviceName));
+			ret->Set(String::NewSymbol("service"), String::NewFromUtf8(isolate, regtype));
+			MakeCallback(refMap[&sdRef], "emit", 2, (Local<Value>[]){ String::NewFromUtf8(isolate, type), ret });
+
 		}, NULL);
 
 		args.This()->SetAlignedPointerInInternalField(0, ref);
@@ -89,7 +103,6 @@ void Terminate(const FunctionCallbackInfo<Value> &args) {
 		DNSServiceRefDeallocate(*ref);
 		delete ref;
 		args.Holder()->SetAlignedPointerInInternalField(0, NULL);
-		args.Holder()->SetAlignedPointerInInternalField(1, NULL);
 
 		if (args.Holder()->GetConstructorName()->Equals(String::NewFromUtf8(isolate, "DNSServiceAdvertisement")))
 			args.Holder()->ForceSet(String::NewSymbol("advertising"), False(isolate), ReadOnly);
