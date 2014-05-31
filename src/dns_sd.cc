@@ -3,6 +3,8 @@
 #include <dns_sd.h>
 #include <mutex>
 #include <map>
+#include <functional>
+#include <pthread.h>
 
 using namespace v8;
 using namespace node;
@@ -34,11 +36,13 @@ void NewAdvertisement(const FunctionCallbackInfo<Value> &args) {
 void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 	auto isolate = Isolate::GetCurrent();
 
-	if (args.IsConstructCall()) {
+	if (args.IsConstructCall()) {		
 		auto volatile ref = new DNSServiceRef;
-		auto Socket = Local<Function>::Cast(Local<Function>::New(isolate, Require)->Call(Null(isolate), 1, (Local<Value>[]){ String::NewFromUtf8("Socket") }));
+		auto require = Local<Function>::New(isolate, Require);
+		auto Socket = Local<Function>::Cast(Local<Object>::Cast(require->Call(Null(isolate), 1, (Local<Value>[]){ String::NewFromUtf8(isolate, "net") }))->Get(String::NewSymbol("Socket")));
 		
 		DNSServiceBrowse(ref, 0, 0, *String::Utf8Value(args[0]->ToString()), NULL, [](DNSServiceRef sdRef, DNSServiceFlags flags, uint32_t interfaceIndex, DNSServiceErrorType errorCode, const char *serviceName, const char *regtype, const char *replyDomain, void *context) {
+			/*
 			auto isolate = Isolate::GetCurrent();
 
 			auto tpl = FunctionTemplate::New();
@@ -57,48 +61,36 @@ void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 			ret->Set(String::NewSymbol("host"), String::NewFromUtf8(isolate, serviceName));
 			ret->Set(String::NewSymbol("service"), String::NewFromUtf8(isolate, regtype));
 			MakeCallback(refMap[&sdRef], "emit", 2, (Local<Value>[]){ String::NewFromUtf8(isolate, type), ret });
-
+			*/
+			//(*(function<void()> *)refMap[&sdRef]->GetAlignedPointerFromInternalField(refMap[&sdRef]->InternalFieldCount() - 2))();
 		}, NULL);
+		
 
 		auto opts = Object::New();
 		opts->Set(String::NewSymbol("fd"), Integer::New(DNSServiceRefSockFD(*ref)));
 		auto socket = Socket->NewInstance(1, (Local<Value>[]){ opts });
+		socket->SetHiddenValue(String::NewSymbol("browser"), args.This());
 
-		//...
+		Local<Function>::Cast(socket->Get(String::NewSymbol("once")))->Call(socket, 2, (Local<Value>[]){ String::NewFromUtf8(isolate, "data"), FunctionTemplate::New([](const FunctionCallbackInfo<Value> &args) {
+			auto isolate = Isolate::GetCurrent();
+			auto ref = (DNSServiceRef *)Local<Object>::Cast(args.Holder()->GetHiddenValue(String::NewSymbol("browser")))->GetAlignedPointerFromInternalField(args.Holder()->InternalFieldCount() - 1);
+
+			if (ref)
+				DNSServiceProcessResult(*ref);
+			else
+				ThrowException(Exception::ReferenceError(String::NewFromUtf8(isolate, "Invoked processResult on terminated browser")));
+		})->GetFunction() });
 
 		args.This()->SetAlignedPointerInInternalField(args.This()->InternalFieldCount() - 1, ref);
 		args.This()->Set(String::NewSymbol("service"), args[0]->ToString(), ReadOnly);
 		args.This()->Set(String::NewSymbol("listening"), True(isolate), ReadOnly);
-		
-		NODE_SET_METHOD(args.This(), "processResult", [](const FunctionCallbackInfo<Value> &args) {
-			auto isolate = Isolate::GetCurrent();
-			auto ref = (DNSServiceRef *)args.Holder()->GetAlignedPointerFromInternalField(0);
-			if (ref) {
-				DNSServiceProcessResult(*ref);
-				args.GetReturnValue().Set(args.Holder());
-			} else {
-				ThrowException(Exception::ReferenceError(String::NewFromUtf8(isolate, "Invoked processResult on terminated browser")));
-			}
-		});
-		
-		NODE_SET_METHOD(args.This(), "removeInits", [](const FunctionCallbackInfo<Value> &args) {
-			auto isolate = Isolate::GetCurrent();
-			if (args.Holder()->Has(String::NewSymbol("removeInits"))) {
-				args.Holder()->ForceDelete(String::NewSymbol("sockFd"));
-				args.Holder()->ForceDelete(String::NewSymbol("processResult"));
-				args.Holder()->ForceDelete(String::NewSymbol("removeInits"));
-				args.GetReturnValue().Set(args.Holder());
-			} else {
-				ThrowException(Exception::ReferenceError(String::NewFromUtf8(isolate, "Inits already removed")));
-			}
-		});
 
 		refMap[ref] = Local<Object>::New(isolate, args.This());
 		args.GetReturnValue().Set(args.This());
 
 	} else {
 		auto cons = Local<Function>::New(isolate, BrowserConstructor);
-		args.GetReturnValue().Set(cons->NewInstance(2, (Local<Value>[]){ args[0], args[1] }));
+		args.GetReturnValue().Set(cons->NewInstance(1, (Local<Value>[]){ args[0] }));
 	}}
 
 void Terminate(const FunctionCallbackInfo<Value> &args) {
@@ -160,7 +152,7 @@ void init(Handle<Object> exports) {
 			auto tempEventEmitter = EventEmitter->NewInstance();
 			
 			tpl->SetClassName(String::NewFromUtf8(isolate, "DNSServiceBrowser"));
-			tpl->InstanceTemplate()->SetInternalFieldCount(tempEventEmitter->InternalFieldCount() + 1);
+			tpl->InstanceTemplate()->SetInternalFieldCount(tempEventEmitter->InternalFieldCount() + 2);
 			NODE_SET_PROTOTYPE_METHOD(tpl, "terminate", Terminate);
 
 			auto ConstructorFunc = tpl->GetFunction();
