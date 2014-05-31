@@ -10,6 +10,7 @@ using namespace std;
 
 Persistent<Function> AdvertisementConstructor;
 Persistent<Function> BrowserConstructor;
+Persistent<Function> Require;
 map<DNSServiceRef volatile *, Local<Object> > refMap;
 
 void NewAdvertisement(const FunctionCallbackInfo<Value> &args) {
@@ -18,7 +19,7 @@ void NewAdvertisement(const FunctionCallbackInfo<Value> &args) {
 	if (args.IsConstructCall()) {
 		auto volatile ref = new DNSServiceRef;
 		DNSServiceRegister(ref, 0, 0, NULL, *String::Utf8Value(args[0]->ToString()), NULL, NULL, args[1]->Int32Value(), 0, NULL, NULL, NULL);
-		args.This()->SetAlignedPointerInInternalField(0, ref);
+		args.This()->SetAlignedPointerInInternalField(args.This()->InternalFieldCount() - 1, ref);
 		args.This()->Set(String::NewSymbol("service"), args[0]->ToString(), ReadOnly);
 		args.This()->Set(String::NewSymbol("port"), Number::New(args[1]->Int32Value()), ReadOnly);
 		args.This()->Set(String::NewSymbol("advertising"), True(isolate), ReadOnly);
@@ -35,6 +36,7 @@ void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 
 	if (args.IsConstructCall()) {
 		auto volatile ref = new DNSServiceRef;
+		auto Socket = Local<Function>::Cast(Local<Function>::New(isolate, Require)->Call(Null(isolate), 1, (Local<Value>[]){ String::NewFromUtf8("Socket") }));
 		
 		DNSServiceBrowse(ref, 0, 0, *String::Utf8Value(args[0]->ToString()), NULL, [](DNSServiceRef sdRef, DNSServiceFlags flags, uint32_t interfaceIndex, DNSServiceErrorType errorCode, const char *serviceName, const char *regtype, const char *replyDomain, void *context) {
 			auto isolate = Isolate::GetCurrent();
@@ -58,12 +60,17 @@ void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 
 		}, NULL);
 
-		args.This()->SetAlignedPointerInInternalField(0, ref);
+		auto opts = Object::New();
+		opts->Set(String::NewSymbol("fd"), Integer::New(DNSServiceRefSockFD(*ref)));
+		auto socket = Socket->NewInstance(1, (Local<Value>[]){ opts });
+
+		//...
+
+		args.This()->SetAlignedPointerInInternalField(args.This()->InternalFieldCount() - 1, ref);
 		args.This()->Set(String::NewSymbol("service"), args[0]->ToString(), ReadOnly);
 		args.This()->Set(String::NewSymbol("listening"), True(isolate), ReadOnly);
-		args.This()->Set(String::NewSymbol("sockFd"), Integer::New(DNSServiceRefSockFD(*ref)), ReadOnly);
 		
-		NODE_SET_METHOD(args.This(), "processResult", [](const FunctionCallbackInfo<Value> &args){
+		NODE_SET_METHOD(args.This(), "processResult", [](const FunctionCallbackInfo<Value> &args) {
 			auto isolate = Isolate::GetCurrent();
 			auto ref = (DNSServiceRef *)args.Holder()->GetAlignedPointerFromInternalField(0);
 			if (ref) {
@@ -74,7 +81,7 @@ void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 			}
 		});
 		
-		NODE_SET_METHOD(args.This(), "removeInits", [](const FunctionCallbackInfo<Value> &args){
+		NODE_SET_METHOD(args.This(), "removeInits", [](const FunctionCallbackInfo<Value> &args) {
 			auto isolate = Isolate::GetCurrent();
 			if (args.Holder()->Has(String::NewSymbol("removeInits"))) {
 				args.Holder()->ForceDelete(String::NewSymbol("sockFd"));
@@ -96,13 +103,13 @@ void NewBrowser(const FunctionCallbackInfo<Value> &args) {
 
 void Terminate(const FunctionCallbackInfo<Value> &args) {
 	auto isolate = Isolate::GetCurrent();
-	auto ref = (DNSServiceRef *)args.Holder()->GetAlignedPointerFromInternalField(0);
+	auto ref = (DNSServiceRef *)args.Holder()->GetAlignedPointerFromInternalField(args.Holder()->InternalFieldCount() - 1);
 
 	if (ref) {
 		assert(ref != NULL);
 		DNSServiceRefDeallocate(*ref);
 		delete ref;
-		args.Holder()->SetAlignedPointerInInternalField(0, NULL);
+		args.Holder()->SetAlignedPointerInInternalField(args.Holder()->InternalFieldCount() - 1, NULL);
 
 		if (args.Holder()->GetConstructorName()->Equals(String::NewFromUtf8(isolate, "DNSServiceAdvertisement")))
 			args.Holder()->ForceSet(String::NewSymbol("advertising"), False(isolate), ReadOnly);
@@ -123,31 +130,47 @@ void Terminate(const FunctionCallbackInfo<Value> &args) {
 }
 
 void init(Handle<Object> exports) {
-	auto isolate = Isolate::GetCurrent();
+	// Get handle to require
+	NODE_SET_METHOD(exports, "registerRequire", [](const FunctionCallbackInfo<Value> &args) {
+		auto isolate = Isolate::GetCurrent();
 
-	// Initializing Advertisement
-	{
-		auto tpl = FunctionTemplate::New(NewAdvertisement);
-		
-		tpl->SetClassName(String::NewFromUtf8(isolate, "DNSServiceAdvertisement"));
-		tpl->InstanceTemplate()->SetInternalFieldCount(1);
-		NODE_SET_PROTOTYPE_METHOD(tpl, "terminate", Terminate);
+		Require.Reset(isolate, Local<Function>::Cast(args[0]));
+		args.Holder()->ForceDelete(String::NewSymbol("registerRequire"));
+		args.GetReturnValue().Set(args.Holder());
 
-		AdvertisementConstructor.Reset(isolate, tpl->GetFunction());
-		NODE_SET_METHOD(exports, "DNSServiceAdvertisement", NewAdvertisement);
-	}
+		// Initializing Advertisement
+		{
+			auto tpl = FunctionTemplate::New(NewAdvertisement);
+			
+			tpl->SetClassName(String::NewFromUtf8(isolate, "DNSServiceAdvertisement"));
+			tpl->InstanceTemplate()->SetInternalFieldCount(1);
+			NODE_SET_PROTOTYPE_METHOD(tpl, "terminate", Terminate);
 
-	// Initializing Browser
-	{
-		auto tpl = FunctionTemplate::New(NewBrowser);
-		
-		tpl->SetClassName(String::NewFromUtf8(isolate, "DNSServiceBrowser"));
-		tpl->InstanceTemplate()->SetInternalFieldCount(1);
-		NODE_SET_PROTOTYPE_METHOD(tpl, "terminate", Terminate);
-		
-		BrowserConstructor.Reset(isolate, tpl->GetFunction());
-		NODE_SET_METHOD(exports, "DNSServiceBrowser", NewBrowser);
-	}
+			AdvertisementConstructor.Reset(isolate, tpl->GetFunction());
+			NODE_SET_METHOD(args.Holder(), "DNSServiceAdvertisement", NewAdvertisement);
+		}
+
+		// Initializing Browser
+		{
+			auto tpl = FunctionTemplate::New(NewBrowser);
+			auto require = Local<Function>::New(isolate, Require);
+			auto inherits = Local<Function>::Cast(Local<Object>::Cast(require->Call(Null(isolate), 1, (Local<Value>[]){ String::NewFromUtf8(isolate, "util") }))->Get(String::NewSymbol("inherits")));
+			auto EventEmitter = Local<Function>::Cast(Local<Object>::Cast(require->Call(Null(isolate), 1, (Local<Value>[]){ String::NewFromUtf8(isolate, "events") }))->Get(String::NewSymbol("EventEmitter")));
+
+			auto tempEventEmitter = EventEmitter->NewInstance();
+			
+			tpl->SetClassName(String::NewFromUtf8(isolate, "DNSServiceBrowser"));
+			tpl->InstanceTemplate()->SetInternalFieldCount(tempEventEmitter->InternalFieldCount() + 1);
+			NODE_SET_PROTOTYPE_METHOD(tpl, "terminate", Terminate);
+
+			auto ConstructorFunc = tpl->GetFunction();
+
+			inherits->Call(Null(isolate), 2, (Local<Value>[]){ ConstructorFunc, EventEmitter });
+			
+			BrowserConstructor.Reset(isolate, ConstructorFunc);
+			NODE_SET_METHOD(args.Holder(), "DNSServiceBrowser", NewBrowser);
+		}
+	});
 }
 
 NODE_MODULE(dns_sd, init)
