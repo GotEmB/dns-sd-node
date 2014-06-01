@@ -2,7 +2,7 @@
   "name": "dns-sd",
   "version": "0.0.0",
   "description": "A lightweight node wrapper to advertise and browse for services using DNS Service Discovery (http://www.dns-sd.org)",
-  "main": "lib/dns-sd.js",
+  "main": "build/Release/dns_sd",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "install": "node-gyp rebuild"
@@ -16,8 +16,8 @@
     "DNSServiceDiscovery",
     "Bonjour"
   ],
-  "author": "Gautham Badhrinathan",
-  "license": "BSD",
+  "author": "Gautham Badhrinathan <b.gautham@gmail.com>",
+  "license": "BSD-3-Clause",
   "gypfile": true,
   "bugs": {
     "url": "https://github.com/GotEmB/dns-sd-node/issues"
