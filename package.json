@@ -16,6 +16,9 @@
     "DNSServiceDiscovery",
     "Bonjour"
   ],
+  "engines" : {
+    "node" : "0.11.10"
+  },
   "author": "Gautham Badhrinathan <b.gautham@gmail.com>",
   "license": "BSD-3-Clause",
   "gypfile": true,
